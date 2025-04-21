@@ -47,6 +47,18 @@ services:
   currency-mailer:
     image: schickling/mailcatcher
     ports: [ '1025', '1080' ]
+
+  currency-redis:
+    container_name: currency-redis
+    platform: linux/amd64
+    image: redis:7.0-alpine
+    command: [ "redis-server", "--appendonly", "yes" ]
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+
+
   
   currency-phpmyadmin:
     container_name: currency-pma
@@ -67,3 +79,4 @@ services:
       - currency-nginx
 volumes:
   db_data:
+  redis_data:
