@@ -1,0 +1,9 @@
+nelmio_api_doc:
+  documentation:
+    info:
+      title: 'Currency Exchange API'
+      description: 'Fetch and serve EUR‑base currency rates'
+      version: '1.0.0'
+  areas:
+    path_patterns: # an array of regexps (document only routes under /api, except /api/doc)
+      - ^/api(?!/doc$)

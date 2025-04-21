@@ -1,0 +1,3 @@
+CREATE DATABASE IF NOT EXISTS currency_test;
+GRANT ALL PRIVILEGES ON currency_test.* TO 'currency'@'%';
+FLUSH PRIVILEGES;
