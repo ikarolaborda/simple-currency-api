@@ -1,5 +1,7 @@
 # Currency Exchange API
 
+[![CI](https://github.com/ikarolaborda/simple-currency-api/actions/workflows/ci.yml/badge.svg)](https://github.com/ikarolaborda/simple-currency-api/actions/workflows/ci.yml)
+
 A Symfony application that fetches currency exchange rates (EUR‑base) from the Frankfurter API, stores them in MySQL, caches them in Redis, and exposes a REST endpoint.
 
 ---
@@ -11,7 +13,8 @@ A Symfony application that fetches currency exchange rates (EUR‑base) from the
 - **MySQL persistence**: full history of fetched rates
 - **REST API**:
   ```http
-  GET /api/exchange-rates
+  # GET
+  http://localhost:8001/api/exchange-rates
     ?base_currency=EUR
     &target_currencies=USD,GBP,JPY
   ```
