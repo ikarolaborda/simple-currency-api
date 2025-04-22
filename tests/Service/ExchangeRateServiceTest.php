@@ -2,23 +2,27 @@
 
 namespace App\Tests\Service;
 
+use App\Entity\CurrencyRate;
 use App\Service\ExchangeRateService;
 use App\Contracts\ExchangeRateClientInterface;
 use App\Repository\CurrencyRateRepository;
-use PHPUnit\Framework\MockObject\Exception;
-use PHPUnit\Framework\TestCase;
 use Doctrine\ORM\EntityManagerInterface;
-use Psr\Cache\CacheItemPoolInterface;
-use Psr\Cache\CacheItemInterface;
 use Doctrine\ORM\Query;
 use Doctrine\ORM\QueryBuilder;
+use PHPUnit\Framework\MockObject\Exception;
+use Psr\Cache\CacheItemInterface;
+use Psr\Cache\CacheItemPoolInterface;
 use Psr\Cache\InvalidArgumentException;
+use PHPUnit\Framework\MockObject\MockObject;
+use PHPUnit\Framework\TestCase;
+use Symfony\Component\Messenger\Envelope;
+use Symfony\Component\Messenger\Exception\ExceptionInterface;
+use Symfony\Component\Messenger\MessageBusInterface;
 
 class ExchangeRateServiceTest extends TestCase
 {
-    /**
+    /** @throws InvalidArgumentException
      * @throws Exception
-     * @throws InvalidArgumentException
      */
     public function testGetRatesCacheHit(): void
     {
@@ -31,18 +35,16 @@ class ExchangeRateServiceTest extends TestCase
         $cache = $this->createMock(CacheItemPoolInterface::class);
         $cache->method('getItem')->willReturn($cacheItem);
 
-        $em = $this->createMock(EntityManagerInterface::class);
+        $em     = $this->createMock(EntityManagerInterface::class);
         $client = $this->createMock(ExchangeRateClientInterface::class);
 
-        $svc = new ExchangeRateService($em, $client, $cache);
-        $result = $svc->getRates('EUR', ['USD', 'GBP']);
+        $svc    = new ExchangeRateService($em, $client, $cache);
 
-        $this->assertSame($rates, $result);
+        $this->assertSame($rates, $svc->getRates('EUR', ['USD', 'GBP']));
     }
 
-    /**
+    /** @throws InvalidArgumentException
      * @throws Exception
-     * @throws InvalidArgumentException
      */
     public function testGetRatesCacheMiss(): void
     {
@@ -78,22 +80,20 @@ class ExchangeRateServiceTest extends TestCase
         $repo = $this->createMock(CurrencyRateRepository::class);
         $repo->method('createQueryBuilder')->willReturn($qb);
 
-        $em = $this->createMock(EntityManagerInterface::class);
+        $em     = $this->createMock(EntityManagerInterface::class);
         $em->method('getRepository')->willReturn($repo);
 
         $client = $this->createMock(ExchangeRateClientInterface::class);
 
-        $svc = new ExchangeRateService($em, $client, $cache);
-        $result = $svc->getRates('EUR', ['USD', 'GBP']);
-
-        $this->assertSame(['USD' => 1.1, 'GBP' => 0.9], $result);
+        $svc    = new ExchangeRateService($em, $client, $cache);
+        $this->assertSame(['USD' => 1.1, 'GBP' => 0.9], $svc->getRates('EUR', ['USD', 'GBP']));
     }
 
-    /**
+    /** @throws InvalidArgumentException
+     * @throws ExceptionInterface
      * @throws Exception
-     * @throws InvalidArgumentException
      */
-    public function testUpdateRates(): void
+    public function testUpdateRatesPersistsAndCaches(): void
     {
         $rates = ['USD' => 1.1, 'GBP' => 0.9];
 
@@ -126,9 +126,99 @@ class ExchangeRateServiceTest extends TestCase
         $em     = $this->createMock(EntityManagerInterface::class);
 
         $svc = new ExchangeRateService($em, $client, $cache);
-        $method = new \ReflectionMethod($svc, 'makeCacheKey');
-
-        $key = $method->invoke($svc, 'EUR', ['GBP', 'USD']);
+        $ref = new \ReflectionMethod($svc, 'makeCacheKey');
+        $key = $ref->invoke($svc, 'EUR', ['GBP', 'USD']);
         $this->assertSame('exchange_rates_eur_gbp_usd', $key);
+    }
+    /** Async Function Tests */
+    /**
+     * @throws Exception
+     * @throws InvalidArgumentException
+     * @throws ExceptionInterface
+     */
+    public function testDispatchesMessageOnRateChange(): void
+    {
+        $rates = ['USD' => 1.20];
+
+        $client = $this->createMock(ExchangeRateClientInterface::class);
+        $client->method('fetchRates')->willReturn($rates);
+
+        $prev = new CurrencyRate();
+        $prev->setBaseCurrency('EUR')
+            ->setTargetCurrency('USD')
+            ->setRate(1.00)
+            ->setFetchedAt(new \DateTimeImmutable('-1 hour'));
+
+        $repo = $this->createMock(CurrencyRateRepository::class);
+        $repo->method('findOneBy')->willReturn($prev);
+
+        $em = $this->createMock(EntityManagerInterface::class);
+        $em->method('getRepository')
+            ->with(CurrencyRate::class)
+            ->willReturn($repo);
+        $em->expects($this->once())->method('persist');
+        $em->expects($this->once())->method('flush');
+
+        $cacheItem = $this->createMock(CacheItemInterface::class);
+        $cacheItem->method('isHit')->willReturn(false);
+
+        $cache = $this->createMock(CacheItemPoolInterface::class);
+        $cache->method('getItem')->willReturn($cacheItem);
+        $cache->expects($this->once())->method('save');
+
+        $bus = $this->createMock(MessageBusInterface::class);
+        $bus->expects($this->once())
+            ->method('dispatch')
+            ->with($this->callback(fn($msg) =>
+                $msg instanceof \App\Message\CurrencyRateChangedMessage
+                && $msg->getBaseCurrency() === 'EUR'
+                && count($msg->getChanges()) === 1
+            ))
+            ->willReturnCallback(fn($msg) => new Envelope($msg));
+
+        $svc = new ExchangeRateService($em, $client, $cache, $bus);
+        $svc->updateRates('EUR', ['USD']);
+    }
+
+    /**
+     * @throws ExceptionInterface
+     * @throws InvalidArgumentException
+     * @throws Exception
+     */
+    public function testDoesNotDispatchWhenNoChange(): void
+    {
+        $rates = ['USD' => 1.00];
+
+        $client = $this->createMock(ExchangeRateClientInterface::class);
+        $client->method('fetchRates')->willReturn($rates);
+
+        $prev = new CurrencyRate();
+        $prev->setBaseCurrency('EUR')
+            ->setTargetCurrency('USD')
+            ->setRate(1.00)
+            ->setFetchedAt(new \DateTimeImmutable('-1 hour'));
+
+        $repo = $this->createMock(CurrencyRateRepository::class);
+        $repo->method('findOneBy')->willReturn($prev);
+
+        $em = $this->createMock(EntityManagerInterface::class);
+        $em->method('getRepository')
+            ->with(CurrencyRate::class)
+            ->willReturn($repo);
+        $em->expects($this->once())->method('persist');
+        $em->expects($this->once())->method('flush');
+
+        $cacheItem = $this->createMock(CacheItemInterface::class);
+        $cacheItem->method('isHit')->willReturn(false);
+
+        $cache = $this->createMock(CacheItemPoolInterface::class);
+        $cache->method('getItem')->willReturn($cacheItem);
+        $cache->expects($this->once())->method('save');
+
+        $bus = $this->createMock(MessageBusInterface::class);
+        $bus->expects($this->never())->method('dispatch');
+
+        $svc = new ExchangeRateService($em, $client, $cache, $bus);
+        $svc->updateRates('EUR', ['USD']);
     }
 }
