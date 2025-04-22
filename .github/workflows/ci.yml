@@ -39,6 +39,15 @@ jobs:
       - name: Install dependencies
         run: composer install --no-progress --no-suggest --prefer-dist
 
+      - name: Create test database
+        run: |
+              mysql \
+                -uroot -p${{ secrets.DB_PASSWORD }} -h127.0.0.1 -e "
+                  CREATE DATABASE IF NOT EXISTS ${{ secrets.DB_DATABASE }}_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+                  GRANT ALL PRIVILEGES ON ${{ secrets.DB_DATABASE }}_test.* TO '${{ secrets.DB_USERNAME }}'@'%';
+                  FLUSH PRIVILEGES;
+              "
+
       - name: Run migrations
         run: php bin/console doctrine:migrations:migrate --no-interaction
 
